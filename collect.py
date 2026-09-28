@@ -29,10 +29,13 @@ left to wt-reap and do not appear.
 Column rules, first match wins:
   todo      — an assigned Linear issue in a Todo state with nothing local. `a`
               on it asks for a repo and starts a worktree on Linear's branch name.
-  your_move — PR has changes requested, failing checks, merge conflicts, or is a draft older than
-              a day; or an agent is `blocked` (needs an approval) or `done`
-              (finished, unseen); or an agent is idle with no PR at all, waiting
-              for its next prompt; or a Linear issue is In Progress with nothing local.
+  your_move — a ready PR has changes requested, failing checks or merge conflicts;
+              or an agent is `blocked` (needs an approval) or `done` (finished,
+              unseen); or a PR is a draft older than a day; or an agent is idle
+              with no PR at all, waiting for its next prompt; or a Linear issue
+              is In Progress with nothing local. A draft's conflicts and red CI
+              are named on its draft reason, not ranked with a ready PR's:
+              nobody can merge a draft, so they block no one yet.
   working   — any agent in `working`.
   mergeable — PR approved and GitHub says it can merge now (mergeStateStatus CLEAN).
   waiting   — PR open, review outstanding. Age since the last push is what the
@@ -282,18 +285,21 @@ def place(c):
     reason = None
     if c.get("todo"):
         return "todo", None
-    if pr and not pr["merged"] and (pr["review"] == "CHANGES_REQUESTED"):
+    ready = pr and not pr["merged"] and not pr["draft"]
+    if ready and pr["review"] == "CHANGES_REQUESTED":
         reason = "changes requested"
-    elif pr and not pr["merged"] and pr["checks"] == "fail":
+    elif ready and pr["checks"] == "fail":
         reason = "checks failing"
-    elif pr and not pr["merged"] and pr.get("conflicts"):
+    elif ready and pr.get("conflicts"):
         reason = "merge conflicts"
     elif "blocked" in statuses:
         reason = "agent needs you"
     elif "done" in statuses:
         reason = "agent finished"
     elif pr and not pr["merged"] and pr["draft"] and (pr["created_days"] or 0) > 1:
-        reason = "draft > 1d"
+        # The suffixes avoid the URGENCY keys, so the card ranks as a draft.
+        reason = " · ".join(["draft > 1d"] + (["conflicts"] if pr.get("conflicts") else [])
+                            + (["CI red"] if pr["checks"] == "fail" else []))
     elif not pr and "idle" in statuses and "working" not in statuses:
         reason = "waiting for prompt" + (f", idle {idle_days:.0f}d" if idle_days >= 1 else "")
     elif c.get("dirty", 0) >= 3 and (ag or pr) and "working" not in statuses:
