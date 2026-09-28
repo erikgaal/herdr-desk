@@ -123,17 +123,38 @@ PR_FIELDS = """number title url headRefName isDraft updatedAt createdAt mergedAt
 OPEN_FIELDS = PR_FIELDS + """ reviewDecision mergeable mergeStateStatus
   reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } ... on Team { name } } } }
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"""
-SEARCH = 'query($q: String!) { search(query: $q, type: ISSUE, first: 100) { nodes { ... on PullRequest { %s } } } }'
+SEARCH_LIMIT = 100
+SEARCH = 'query($q: String!) { search(query: $q, type: ISSUE, first: %d) { issueCount nodes { ... on PullRequest { %%s } } } }' % SEARCH_LIMIT
 GITHUB_ERROR = f"{STATE_DIR}/github-error.txt"
 
 
+def incomplete(response):
+    """Why a search response that parsed is still short of PRs, or "" when it is whole.
+
+    GitHub can answer 200 with a partial result: an `errors` list beside the data, null
+    entries where a PR failed to resolve, or fewer nodes than `issueCount`. Taken as
+    complete, every PR it left out would drop off the board until the next refresh.
+    """
+    search = response["data"]["search"]
+    nodes = search["nodes"]
+    if response.get("errors"):
+        return "partial result: " + (response["errors"][0].get("message") or "unknown error")
+    if any(n is None for n in nodes):
+        return f"partial result: {sum(n is None for n in nodes)} PR(s) did not resolve"
+    expected = min(search.get("issueCount") or 0, SEARCH_LIMIT)
+    if len(nodes) < expected:
+        return f"partial result: {len(nodes)} of {expected} PRs"
+    return ""
+
+
 def search_prs(q, fields):
-    """(nodes, error) for one PR search; error is "" on success, else gh's own message.
+    """(nodes, error) for one PR search; error is "" on success, else the reason it failed.
 
     Tried twice: the failures seen in practice (HTTP 504 on the heavy search, TCP dial
-    timeouts) are transient, and a second attempt usually succeeds.
+    timeouts, partial results) are transient, and a second attempt usually succeeds. After
+    two partial results the PRs that did resolve are still returned, with the error.
     """
-    error = ""
+    error, partial = "", []
     for _ in range(2):
         try:
             r = subprocess.run(["gh", "api", "graphql", "-f", f"q={q}", "-f", f"query={SEARCH % fields}"],
@@ -144,18 +165,25 @@ def search_prs(q, fields):
         except OSError as e:
             return [], f"gh could not run: {e}"
         try:
-            return json.loads(r.stdout)["data"]["search"]["nodes"], ""
+            response = json.loads(r.stdout)
+            nodes = response["data"]["search"]["nodes"]
         except Exception:
             lines = [l.strip() for l in (r.stderr or r.stdout).splitlines() if l.strip()]
             error = (lines[-1] if lines else f"gh exited {r.returncode}").removeprefix("gh: ")
-    return [], error
+            continue
+        error = incomplete(response)
+        if not error:
+            return nodes, ""
+        partial = [n for n in nodes if n]
+    return partial, error
 
 
 def all_prs():
     """All of the user's open PRs plus PRs merged in the last 7 days, in two GraphQL calls
     total rather than two per repo. Returns (prs_by_repo_slug, error); error is "" on success,
-    else the reason GitHub refused, and the caller then keeps the previous snapshot. The
-    reason is also written to github-error.txt with the time it happened."""
+    else the reason GitHub refused or answered short, and the caller then keeps the previous
+    snapshot under whatever PRs did arrive. The reason is also written to github-error.txt
+    with the time it happened."""
     since = (dt.date.today() - dt.timedelta(days=7)).isoformat()
     by_slug, errors = {}, []
     for q, fields in (("is:pr author:@me is:open archived:false", OPEN_FIELDS),
@@ -165,7 +193,6 @@ def all_prs():
             errors.append(error)
             with open(GITHUB_ERROR, "a") as f:
                 f.write(f"{dt.datetime.now():%FT%T} {q}: {error}\n")
-            continue
         for n in nodes:
             if not n:
                 continue
@@ -396,8 +423,9 @@ def collect():
         pass
     prs_by_slug, github_error = all_prs()
     if github_error:
-        # GitHub refused (a 504 on the search, a network timeout, or the rate limit). Reuse the
-        # PRs from the last board so cards do not vanish; the board shows the reason as stale data.
+        # GitHub refused or answered short (a 504, a network timeout, the rate limit, a partial
+        # result). Reuse the PRs from the last board so cards do not vanish; the PRs that did
+        # arrive overwrite them below, and the board shows the reason as stale data.
         try:
             prev = json.load(open(BOARD))
             for col in prev["columns"].values():

@@ -1,5 +1,5 @@
 """Column rules of collect.place. Run: python3 test_collect.py"""
-from collect import place
+from collect import incomplete, place
 
 
 def card(pr=None, agents=(), **extra):
@@ -36,4 +36,15 @@ assert place(card(pr(merged=True))) == ("landed", None)
 assert place(card(pr(merged=True), path=None)) == (None, None)
 assert place(card()) == (None, None)
 assert place(card(todo=True)) == ("todo", None)
+
+
+def search(nodes, count, errors=None):
+    return {"data": {"search": {"issueCount": count, "nodes": nodes}}, **({"errors": errors} if errors else {})}
+
+
+assert incomplete(search([{}, {}], 2)) == ""
+assert incomplete(search([{}] * 100, 140)) == ""   # past the page size: a limit, not a partial answer
+assert incomplete(search([{}], 3)) == "partial result: 1 of 3 PRs"
+assert incomplete(search([{}, None], 2)) == "partial result: 1 PR(s) did not resolve"
+assert incomplete(search([{}], 1, [{"message": "timeout"}])) == "partial result: timeout"
 print("ok")
