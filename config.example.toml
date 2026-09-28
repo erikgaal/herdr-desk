@@ -8,7 +8,11 @@ repos_dir = "~/Developer"
 default_repo = ""
 
 [linear]
-# The API key comes from $LINEAR_API_KEY, else from the output of this command.
+# Preferred: send Linear queries through linear-cli (github.com/nesszer/linear-cli),
+# which uses its own login (`linear-cli auth oauth` or `linear-cli auth login`).
+# cli = "linear-cli"
+
+# Without cli, the API key comes from $LINEAR_API_KEY, else from the output of this command.
 # On macOS the default reads the keychain item with service "linear-api":
 #   security add-generic-password -s linear-api -a "$USER" -w <key>
 # Elsewhere there is no default; for example: key_command = "pass show linear/api-key"
