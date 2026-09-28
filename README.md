@@ -5,9 +5,10 @@ A [Herdr](https://herdr.dev) plugin that shows your agent sessions, git worktree
 | Column | A card is here when |
 |---|---|
 | TODO | a Linear issue is assigned to you, in a Todo state, and nothing local exists for it |
-| YOUR MOVE | changes requested, CI red, merge conflicts, an agent is blocked or finished, a draft is older than a day, or an agent has idled 2 days without a PR |
+| YOUR MOVE | changes requested, CI red, merge conflicts, an agent is blocked or finished, a draft is older than a day, or an agent is idle without a PR, waiting for its next prompt |
 | WORKING | an agent is running |
 | WAITING ON OTHERS | a PR is open and waits for review |
+| MERGEABLE | a PR is approved and GitHub says it can merge now |
 | LANDED → REAP | the PR merged but its worktree or session still exists |
 
 A card is one branch. For example, the branch `eng-142-retry-webhooks` with a worktree, a Claude session that is `blocked` and an open PR with green CI shows up as one card in YOUR MOVE with the reason "agent needs you". Press Enter to jump to that session's workspace.

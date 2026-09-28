@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Desk collector: joins Herdr agents, git worktrees and GitHub PRs into one
-card per branch, then sorts the cards into four columns.
+card per branch, then sorts the cards into columns.
 
 The board is a view over three sources that know nothing of each other:
   * Herdr   — which agent runs where and whether it is working, idle, blocked
@@ -31,9 +31,10 @@ Column rules, first match wins:
               on it asks for a repo and starts a worktree on Linear's branch name.
   your_move — PR has changes requested, failing checks, merge conflicts, or is a draft older than
               a day; or an agent is `blocked` (needs an approval) or `done`
-              (finished, unseen); or an agent idles > 2 days with no PR at all;
-              or a Linear issue is In Progress with nothing local.
+              (finished, unseen); or an agent is idle with no PR at all, waiting
+              for its next prompt; or a Linear issue is In Progress with nothing local.
   working   — any agent in `working`.
+  mergeable — PR approved and GitHub says it can merge now (mergeStateStatus CLEAN).
   waiting   — PR open, review outstanding. Age since the last push is what the
               card shows, because that is how long a reviewer has had it.
   landed    — PR merged but a worktree or agent still exists: reaper territory.
@@ -255,6 +256,50 @@ def linear_lookup(identifiers):
     } for n in nodes}
 
 
+def place(c):
+    """(column, reason) for one card, by the rules in the module docstring; column is None for
+    a card that is not shown, and reason is set only for your_move."""
+    pr, ag = c["pr"], c["agents"]
+    statuses = {a["status"] for a in ag}
+    idle_days = max((a["since_days"] for a in ag if a["status"] == "idle"), default=0)
+    reason = None
+    if c.get("todo"):
+        return "todo", None
+    if pr and not pr["merged"] and (pr["review"] == "CHANGES_REQUESTED"):
+        reason = "changes requested"
+    elif pr and not pr["merged"] and pr["checks"] == "fail":
+        reason = "checks failing"
+    elif pr and not pr["merged"] and pr.get("conflicts"):
+        reason = "merge conflicts"
+    elif "blocked" in statuses:
+        reason = "agent needs you"
+    elif "done" in statuses:
+        reason = "agent finished"
+    elif pr and not pr["merged"] and pr["draft"] and (pr["created_days"] or 0) > 1:
+        reason = "draft > 1d"
+    elif not pr and "idle" in statuses and "working" not in statuses:
+        reason = "waiting for prompt" + (f", idle {idle_days:.0f}d" if idle_days >= 1 else "")
+    elif c.get("dirty", 0) >= 3 and (ag or pr) and "working" not in statuses:
+        # Uncommitted work only counts as yours to move when a session or PR makes it live.
+        # A bare worktree with stray files is wt-reap's review list, not a card.
+        reason = f"{c['dirty']} uncommitted file(s)"
+    elif c.get("orphan_issue"):
+        reason = f"{c['issue']['state']} in Linear, nothing local"
+    if reason:
+        return "your_move", reason
+    if "working" in statuses:
+        return "working", None
+    if pr and not pr["merged"] and pr.get("mergeable"):
+        return "mergeable", None
+    if pr and not pr["merged"]:
+        return "waiting", None
+    if pr and pr["merged"] and (c["path"] or ag):
+        return "landed", None
+    if ag:
+        return "waiting", None  # agent in a state Herdr cannot classify, no PR
+    return None, None
+
+
 def load_state():
     try:
         return json.load(open(STATE))
@@ -353,6 +398,10 @@ def collect():
                     # so the previous snapshot's answer is kept until GitHub commits to one.
                     "conflicts": (previous_conflicts.get((name, pr["headRefName"])) if pr.get("mergeable") == "UNKNOWN"
                                   else pr.get("mergeable") == "CONFLICTING" or pr.get("mergeStateStatus") == "DIRTY"),
+                    # GitHub's own verdict under branch protection, plus an approval: repos
+                    # without required reviews report CLEAN for PRs nobody has looked at.
+                    "mergeable": not pr["isDraft"] and pr.get("reviewDecision") == "APPROVED"
+                                 and pr.get("mergeStateStatus") in ("CLEAN", "HAS_HOOKS"),
                 }
                 if not c["ticket"]:
                     c["ticket"] = ticket(pr["title"])
@@ -391,48 +440,16 @@ def collect():
                                     "agents": [], "workspace_id": None, "ticket": i["id"], "issue": i, "orphan_issue": True,
                                     "todo": i["state_type"] != "started"}
 
-    columns = {"todo": [], "your_move": [], "working": [], "waiting": [], "landed": []}
+    columns = {"todo": [], "your_move": [], "working": [], "waiting": [], "mergeable": [], "landed": []}
     for c in cards.values():
-        pr, ag = c["pr"], c["agents"]
-        statuses = {a["status"] for a in ag}
-        idle_days = max((a["since_days"] for a in ag if a["status"] == "idle"), default=0)
-        reason = None
-        if c.get("todo"):
-            columns["todo"].append(c); continue
-        if pr and not pr["merged"] and (pr["review"] == "CHANGES_REQUESTED"):
-            reason = "changes requested"
-        elif pr and not pr["merged"] and pr["checks"] == "fail":
-            reason = "checks failing"
-        elif pr and not pr["merged"] and pr.get("conflicts"):
-            reason = "merge conflicts"
-        elif "blocked" in statuses:
-            reason = "agent needs you"
-        elif "done" in statuses:
-            reason = "agent finished"
-        elif pr and not pr["merged"] and pr["draft"] and (pr["created_days"] or 0) > 1:
-            reason = "draft > 1d"
-        elif not pr and ag and idle_days > 2 and "working" not in statuses:
-            reason = f"no PR, idle {idle_days:.0f}d"
-        elif c.get("dirty", 0) >= 3 and (ag or pr) and "working" not in statuses:
-            # Uncommitted work only counts as yours to move when a session or PR makes it live.
-            # A bare worktree with stray files is wt-reap's review list, not a card.
-            reason = f"{c['dirty']} uncommitted file(s)"
-        elif c.get("orphan_issue"):
-            reason = f"{c['issue']['state']} in Linear, nothing local"
+        key, reason = place(c)
         if reason:
             c["reason"] = reason
-            columns["your_move"].append(c)
-        elif "working" in statuses:
-            columns["working"].append(c)
-        elif pr and not pr["merged"]:
-            columns["waiting"].append(c)
-        elif pr and pr["merged"] and (c["path"] or ag):
-            columns["landed"].append(c)
-        elif ag:
-            columns["waiting"].append(c)  # idle agent, no PR yet, under 2 days
+        if key:
+            columns[key].append(c)
         # else: bare worktree with nothing attached, not shown
 
-    URGENCY = ["changes requested", "checks failing", "merge conflicts", "agent needs you", "uncommitted", "agent finished", "in linear", "no pr", "draft"]
+    URGENCY = ["changes requested", "checks failing", "merge conflicts", "agent needs you", "uncommitted", "agent finished", "in linear", "waiting for prompt", "draft"]
 
     def urgency(c):
         """Approved PRs first: one rebase or one CI fix from merging, they are the cheapest

@@ -2,7 +2,7 @@ id = "desk"
 name = "Desk"
 version = "0.1.0"
 min_herdr_version = "0.9.0"
-description = "Five-column board of your live work: agents, worktrees and PRs, sorted into todo / your move / working / waiting / landed"
+description = "Board of your live work: agents, worktrees and PRs, sorted into todo / your move / working / waiting / mergeable / landed"
 platforms = ["macos", "linux"]
 
 # On `herdr plugin install`, create .venv with the pinned Textual. `herdr plugin link`

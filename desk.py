@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Desk: a four-column board over the cards collect.py produces.
+"""Desk: a board over the cards collect.py produces.
 
-Columns left to right: YOUR MOVE, WORKING, WAITING ON OTHERS, LANDED → REAP.
+Columns left to right: TODO, YOUR MOVE, WORKING, WAITING ON OTHERS, MERGEABLE, LANDED → REAP.
 Left/right moves between columns, up/down between cards. Actions act on the
 focused card and shell out to `herdr`, `gh`, `wt` and the configured hooks; the board never
 mutates state itself. Data refreshes in a background thread every 60s or on `r`,
@@ -29,7 +29,8 @@ from config import BOARD, STATE_DIR
 HERE = os.path.dirname(os.path.abspath(__file__))
 os.environ["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:" + os.environ.get("PATH", "")
 COLUMNS = [("todo", "TODO", "$magenta"), ("your_move", "YOUR MOVE", "$red"), ("working", "WORKING", "$green"),
-           ("waiting", "WAITING ON OTHERS", "$yellow"), ("landed", "LANDED → REAP", "$blue")]
+           ("waiting", "WAITING ON OTHERS", "$yellow"), ("mergeable", "MERGEABLE", "$cyan"),
+           ("landed", "LANDED → REAP", "$blue")]
 HUES = ("red", "green", "yellow", "blue", "magenta", "cyan")
 STATUS_GLYPH = {"working": "●", "idle": "◌", "blocked": "◆", "done": "✔", "unknown": "?"}
 
@@ -279,7 +280,7 @@ class Desk(App):
         Binding("escape", "clear_filter", show=False),
         Binding("1", "goto_col(0)", show=False), Binding("2", "goto_col(1)", show=False),
         Binding("3", "goto_col(2)", show=False), Binding("4", "goto_col(3)", show=False),
-        Binding("5", "goto_col(4)", show=False),
+        Binding("5", "goto_col(4)", show=False), Binding("6", "goto_col(5)", show=False),
         Binding("left", "col(-1)", show=False), Binding("right", "col(1)", show=False),
         Binding("h", "col(-1)", show=False), Binding("l", "col(1)", show=False),
         Binding("up", "row(-1)", show=False), Binding("down", "row(1)", show=False),
@@ -810,7 +811,7 @@ class Help(ModalScreen):
         ("j  k  ↑  ↓", "previous / next card"),
         ("h  l  ←  →", "previous / next column (board scrolls sideways)"),
         ("shift+wheel", "scroll the board sideways"),
-        ("1  2  3  4  5", "jump to a column"),
+        ("1 … 6", "jump to a column"),
         ("Look", None),
         ("Space", "details of the focused card"),
         ("/", "filter all columns as you type · Esc clears"),
@@ -833,10 +834,11 @@ class Help(ModalScreen):
         ("Columns", None),
         ("TODO", "assigned Linear issues with nothing local, by priority"),
         ("YOUR MOVE", "changes requested · CI red · merge conflicts · agent blocked or done"),
-        ("", "In Progress in Linear with nothing local · no PR after 2 idle days"),
+        ("", "In Progress in Linear with nothing local · idle agent with no PR"),
         ("", "drafts older than a day, folded after a week"),
         ("WORKING", "an agent is running"),
         ("WAITING ON OTHERS", "review outstanding · ⚠ after 2 days, red after 5"),
+        ("MERGEABLE", "approved and GitHub can merge it now"),
         ("LANDED → REAP", "PR merged, worktree or session still here"),
     ]
 
