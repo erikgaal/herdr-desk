@@ -561,12 +561,15 @@ class Desk(App):
             self.notify("no open PR on this card", severity="warning"); return
         if c.get("review_request"):
             self.notify("someone else's PR: v reviews it", severity="warning"); return
-        templates = ([config.FIX_CONFLICTS, config.DEFAULT_FIX_CONFLICTS] if pr.get("conflicts") else []) \
-            + ([config.FIX_CHECKS, config.DEFAULT_FIX_CHECKS] if pr.get("checks") == "fail" else [])
-        if not templates:
-            self.notify("nothing mechanical to fix: no merge conflicts and CI is not red", severity="warning"); return
         fields = {"number": pr["number"], "url": pr["url"], "branch": c["branch"], "base": pr.get("base") or "the base branch"}
-        text = "\n\n".join(fill(templates[i], templates[i + 1], fields) for i in range(0, len(templates), 2))
+        tasks = ([fill(config.FIX_CONFLICTS, config.DEFAULT_FIX_CONFLICTS, fields)] if pr.get("conflicts") else []) \
+            + ([fill(config.FIX_CHECKS, config.DEFAULT_FIX_CHECKS, fields)] if pr.get("checks") == "fail" else [])
+        if not tasks:
+            self.notify("nothing mechanical to fix: no merge conflicts and CI is not red", severity="warning"); return
+        if len(tasks) > 1:
+            # Conflicts go first: resolving them changes the code CI runs, and can turn it green.
+            tasks = [f"{i}. {t}" for i, t in enumerate(tasks, 1)] + ["Resolve the conflicts first: CI may pass once they are gone."]
+        text = fill(config.FIX_BRIEF, config.DEFAULT_FIX_BRIEF, {**fields, "tasks": "\n\n".join(tasks)})
         agents = c.get("agents", [])
         free = next((a for a in agents if a["status"] in ("idle", "done")), None)
         if free:

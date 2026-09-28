@@ -27,18 +27,23 @@ DEFAULT_BRIEF = (
     "else: it is the spec for this branch."
 )
 
-# Briefs for `f`, which hands a PR's mechanical fix to an agent. Fields: {number} {url} {branch} {base}.
+# The brief `f` sends to fix a PR: one frame around one task per problem, so a PR with both
+# conflicts and red CI reads as one job. Fields everywhere: {number} {url} {branch} {base};
+# the frame also gets {tasks}, the task texts, numbered when there is more than one.
+DEFAULT_FIX_BRIEF = (
+    "PR #{number} on branch {branch} needs fixing before it can merge: {url}\n\n"
+    "{tasks}\n\n"
+    "Then run the tests and push. Stop and ask when a fix needs a decision about behaviour "
+    "rather than code."
+)
 DEFAULT_FIX_CONFLICTS = (
-    "PR #{number} ({url}) on branch {branch} has merge conflicts with {base}. Bring {base} into "
-    "this branch the way the repo does it (rebase or merge), resolve every conflict so both sides' "
-    "intent survives, run the tests, and push. Stop and ask when a conflict needs a decision "
-    "about behaviour rather than code."
+    "It has merge conflicts with {base}. Bring {base} in the way the repo does it (rebase or "
+    "merge) and resolve every conflict so both sides' intent survives."
 )
 DEFAULT_FIX_CHECKS = (
-    "PR #{number} ({url}) on branch {branch} has failing CI checks. Find them with "
-    "`gh pr checks {number}` and read the failing logs with `gh run view <run-id> --log-failed`. "
-    "Fix the cause, not the symptom: a test is changed only when the test itself is wrong. Run "
-    "the failing checks locally where you can, then push. Stop and ask when the fix changes behaviour."
+    "CI is failing. Find the failing checks with `gh pr checks {number}` and read their logs with "
+    "`gh run view <run-id> --log-failed`. Fix the cause, not the symptom: change a test only when "
+    "the test itself is wrong, and run the failing checks locally where you can."
 )
 
 
@@ -85,6 +90,7 @@ TEAM_REVIEW_REQUESTS = bool(_github.get("team_review_requests", False))
 
 AGENT_KIND = _agent.get("kind", "claude")
 BRIEF = _agent.get("brief", DEFAULT_BRIEF)
+FIX_BRIEF = _agent.get("fix_brief", DEFAULT_FIX_BRIEF)
 FIX_CONFLICTS = _agent.get("fix_conflicts", DEFAULT_FIX_CONFLICTS)
 FIX_CHECKS = _agent.get("fix_checks", DEFAULT_FIX_CHECKS)
 
