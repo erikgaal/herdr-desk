@@ -351,13 +351,28 @@ class Desk(App):
                     return ci, ri
         return 0, 0
 
+    def _enter_col(self, grid, ci, ri):
+        """Focus the card last focused in column ci, else the one at row ri (clamped).
+
+        The card is remembered by (repo, branch), not by row: a refresh rebuilds and
+        re-sorts the columns, and the same row may then hold a different card.
+        """
+        col = grid[ci]
+        key = getattr(self, "_col_cards", {}).get(ci)
+        target = next((c for c in col if (c.data["repo"], c.data["branch"]) == key), None) or col[min(ri, len(col) - 1)]
+        target.focus(); list(self.query(Column))[ci].scroll_visible()
+
+    def on_descendant_focus(self, event):
+        if isinstance(event.widget, Card):
+            ci, _ = self._pos()
+            self._col_cards = {**getattr(self, "_col_cards", {}), ci: (event.widget.data["repo"], event.widget.data["branch"])}
+
     def action_col(self, d):
         grid = self._grid(); ci, ri = self._pos()
         for step in range(1, 6):
             nc = ci + d * step
             if 0 <= nc < len(grid) and grid[nc]:
-                target = grid[nc][min(ri, len(grid[nc]) - 1)]
-                target.focus(); list(self.query(Column))[nc].scroll_visible(); return
+                self._enter_col(grid, nc, ri); return
 
     def action_row(self, d):
         grid = self._grid(); ci, ri = self._pos()
@@ -613,7 +628,7 @@ class Desk(App):
         if i < len(cols):
             cols[i].scroll_visible()
         if i < len(grid) and grid[i]:
-            grid[i][0].focus()
+            self._enter_col(grid, i, 0)
 
     def action_toggle_drafts(self):
         self.show_drafts = not self.show_drafts
