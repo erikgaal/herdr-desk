@@ -28,8 +28,9 @@ from config import BOARD, STATE_DIR
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 os.environ["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:" + os.environ.get("PATH", "")
-COLUMNS = [("todo", "TODO", "bright_magenta"), ("your_move", "YOUR MOVE", "bright_red"), ("working", "WORKING", "bright_green"),
-           ("waiting", "WAITING ON OTHERS", "bright_yellow"), ("landed", "LANDED → REAP", "bright_blue")]
+COLUMNS = [("todo", "TODO", "$magenta"), ("your_move", "YOUR MOVE", "$red"), ("working", "WORKING", "$green"),
+           ("waiting", "WAITING ON OTHERS", "$yellow"), ("landed", "LANDED → REAP", "$blue")]
+HUES = ("red", "green", "yellow", "blue", "magenta", "cyan")
 STATUS_GLYPH = {"working": "●", "idle": "◌", "blocked": "◆", "done": "✔", "unknown": "?"}
 
 
@@ -93,7 +94,7 @@ def nudge_text(card):
 class Card(Static):
     DEFAULT_CSS = """
     Card { border: round ansi_bright_black; padding: 0 1; margin: 0 0 1 0; height: auto; background: ansi_default; color: ansi_default; }
-    Card:focus { border: heavy ansi_bright_yellow; }
+    Card:focus { border: heavy $yellow; }
     """
     can_focus = True
 
@@ -117,10 +118,10 @@ class Card(Static):
         lines = []
 
         # 1. Title: issue > PR > what the session calls itself > branch. Two lines at most.
-        prio = {1: "[ansi_bright_red]!![/ansi_bright_red] ", 2: "[ansi_bright_yellow]![/ansi_bright_yellow] "}.get(issue["priority"], "") if issue else ""
+        prio = {1: "[$red]!![/$red] ", 2: "[$yellow]![/$yellow] "}.get(issue["priority"], "") if issue else ""
         title = (issue and issue["title"]) or (pr and pr["title"]) or next((a["title"] for a in agents if a.get("title")), "") \
             or (c["branch"].replace("detached@", "") if c["branch"] else os.path.basename(c["path"] or "~"))
-        lines.append(f"{prio}[b ansi_bright_white]{escape(fit(title, 2 * w - 4))}[/b ansi_bright_white]")
+        lines.append(f"{prio}[b]{escape(fit(title, 2 * w - 4))}[/b]")
 
         # 2. Identifiers: ticket, PR, repo. The branch is in details; it rarely says more than the title.
         ids, used = [], 0   # `used` counts visible characters; the markup in `ids` is much longer than what renders
@@ -141,19 +142,19 @@ class Card(Static):
         said = set()
         if pr:
             if pr["merged"]:
-                state = "[ansi_bright_blue]merged[/ansi_bright_blue]"; said.add("merged")
+                state = "[$blue]merged[/$blue]"; said.add("merged")
             elif pr["draft"]:
                 state = "[dim]draft[/dim]"; said.add("draft")
             else:
-                state = {"CHANGES_REQUESTED": "[ansi_bright_red]changes requested[/ansi_bright_red]", "APPROVED": "[ansi_bright_green]approved[/ansi_bright_green]",
-                         "REVIEW_REQUIRED": "[ansi_bright_yellow]review requested[/ansi_bright_yellow]"}.get(pr["review"], "open")
+                state = {"CHANGES_REQUESTED": "[$red]changes requested[/$red]", "APPROVED": "[$green]approved[/$green]",
+                         "REVIEW_REQUIRED": "[$yellow]review requested[/$yellow]"}.get(pr["review"], "open")
                 if pr["review"] == "CHANGES_REQUESTED": said.add("changes requested")
-            chk = {"fail": "[ansi_bright_red]✗ CI[/ansi_bright_red]", "pass": "[ansi_bright_green]✓ CI[/ansi_bright_green]", "pending": "[ansi_bright_yellow]… CI[/ansi_bright_yellow]"}.get(pr["checks"], "")
+            chk = {"fail": "[$red]✗ CI[/$red]", "pass": "[$green]✓ CI[/$green]", "pending": "[$yellow]… CI[/$yellow]"}.get(pr["checks"], "")
             if pr["checks"] == "fail": said.add("checks failing")
-            conflict = "[ansi_bright_red]⚡ conflicts[/ansi_bright_red]" if pr.get("conflicts") and not pr["merged"] else ""
+            conflict = "[$red]⚡ conflicts[/$red]" if pr.get("conflicts") and not pr["merged"] else ""
             if conflict: said.add("merge conflicts")
             age_d = pr["updated_days"] or 0
-            age_col = "bright_red" if age_d > 5 and not pr["merged"] else ("bright_yellow" if age_d > 2 and not pr["merged"] else "dim")
+            age_col = "$red" if age_d > 5 and not pr["merged"] else ("$yellow" if age_d > 2 and not pr["merged"] else "dim")
             parts = [state, chk, conflict, f"[{age_col}]{days(pr['updated_days'])}[/{age_col}]"]
             if pr["reviewers"] and not pr["merged"]:
                 parts.append(f"[dim]→ {escape(fit(', '.join(pr['reviewers']), max(10, w - 34)))}[/dim]")
@@ -162,7 +163,7 @@ class Card(Static):
         # 4. Sessions.
         for a in agents:
             g = STATUS_GLYPH.get(a["status"], "?")
-            col = {"working": "bright_green", "blocked": "bright_red", "done": "bright_cyan"}.get(a["status"], "dim")
+            col = {"working": "$green", "blocked": "$red", "done": "$cyan"}.get(a["status"], "dim")
             extra = f"  [dim]{escape(fit(a['title'], w - 22))}[/dim]" if a.get("title") and a["title"] != title and len(agents) > 1 else ""
             lines.append(f"[{col}]{g} {a['kind']} {a['status']}[/{col}] [dim]{days(a['since_days'])}[/dim]{extra}")
 
@@ -173,7 +174,7 @@ class Card(Static):
                 bits.append(f"{c['dirty']} uncommitted")
             if c.get("unpushed"):
                 bits.append(f"{c['unpushed']} unpushed")
-            lines.append(f"[ansi_bright_magenta]✎ {escape(', '.join(bits))}[/ansi_bright_magenta]")
+            lines.append(f"[$magenta]✎ {escape(', '.join(bits))}[/$magenta]")
 
         # 5. Reason, only when the status line has not already said it.
         reason = c.get("reason")
@@ -246,16 +247,17 @@ class Desk(App):
     ansi_color = True
     ENABLE_COMMAND_PALETTE = False
     CSS = """
+    * { link-color: ansi_default; link-color-hover: ansi_default; link-background-hover: ansi_default; }
     Screen { layout: vertical; background: ansi_default; color: ansi_default; }
     #board { height: 1fr; background: ansi_default; scrollbar-color: ansi_bright_black; scrollbar-background: ansi_default; scrollbar-size-horizontal: 1; }
-    #filter { display: none; height: 3; background: ansi_default; color: ansi_bright_white; border: round ansi_bright_yellow; }
+    #filter { display: none; height: 3; background: ansi_default; color: ansi_default; border: round $yellow; }
     #filter.shown { display: block; }
-    Header { background: ansi_default; color: ansi_bright_white; }
+    Header { background: ansi_default; color: ansi_default; }
     Footer { background: ansi_default; }
-    Footer > .footer--key, FooterKey { background: ansi_default; color: ansi_bright_yellow; }
-    FooterKey .footer-key--key { background: ansi_default; color: ansi_bright_yellow; }
+    Footer > .footer--key, FooterKey { background: ansi_default; color: $yellow; }
+    FooterKey .footer-key--key { background: ansi_default; color: $yellow; }
     FooterKey .footer-key--description { background: ansi_default; color: ansi_default; }
-    Toast { background: ansi_default; color: ansi_bright_white; border: round ansi_bright_black; }
+    Toast { background: ansi_default; color: ansi_default; border: round ansi_bright_black; }
     """
     TITLE = "Desk"
     BINDINGS = [
@@ -301,11 +303,27 @@ class Desk(App):
     board = None
     needle = ""
     show_drafts = False
+    dark = False
+
+    def get_theme_variable_defaults(self):
+        # Bright hues pop on a dark background but wash out on a light one.
+        return {h: f"ansi_bright_{h}" if self.dark else f"ansi_{h}" for h in HUES}
+
+    def set_dark(self, dark):
+        if dark != self.dark:
+            self.dark = dark
+            self.refresh_css()
+            self.render_board()
 
     def on_mount(self):
+        # Ask to be told the terminal's dark/light scheme now and whenever it changes (mode 2031).
+        self._driver.write("\x1b[?2031h\x1b[?996n")
         self.load(from_disk=True)
         # 5 minutes: GitHub's GraphQL budget is shared with every other tool and agent on this account.
         self.set_interval(300, self.load)
+
+    def on_unmount(self):
+        self._driver.write("\x1b[?2031l")
 
     @work(thread=True, exclusive=True)
     def load(self, from_disk=False):
@@ -683,7 +701,7 @@ class Details(ModalScreen):
     BINDINGS = [Binding("escape", "dismiss", "close"), Binding("space", "dismiss", show=False), Binding("q", "dismiss", show=False)]
     DEFAULT_CSS = """
     Details { align: center middle; background: ansi_default 60%; }
-    Details > Static { width: 90; height: auto; max-height: 90%; border: round ansi_bright_yellow; padding: 1 2; background: ansi_default; color: ansi_default; }
+    Details > Static { width: 90; height: auto; max-height: 90%; border: round $yellow; padding: 1 2; background: ansi_default; color: ansi_default; }
     """
 
     def __init__(self, c):
@@ -693,13 +711,13 @@ class Details(ModalScreen):
         c = self.c; pr = c.get("pr"); issue = c.get("issue"); L = []
         L.append(f"[b]{escape(c['repo'])}[/b] · {escape(c['branch'] or '')}")
         if c.get("path"): L.append(f"[dim]worktree[/dim]  {escape(c['path'])}")
-        if c.get("reason"): L.append(f"[ansi_bright_red]▶ {escape(c['reason'])}[/ansi_bright_red]")
+        if c.get("reason"): L.append(f"[$red]▶ {escape(c['reason'])}[/$red]")
         if c.get("dirty") or c.get("unpushed"):
-            L.append(f"[ansi_bright_magenta]✎ {c.get('dirty', 0)} uncommitted · {c.get('unpushed', 0)} unpushed[/ansi_bright_magenta]")
+            L.append(f"[$magenta]✎ {c.get('dirty', 0)} uncommitted · {c.get('unpushed', 0)} unpushed[/$magenta]")
         if issue:
             L += ["", f"[b]{link(issue['id'], issue['url'])}[/b]  {escape(issue['state'])}  [dim]{escape(issue['project'])}[/dim]", escape(issue["title"])]
         if pr:
-            L += ["", f"[b]{link('#' + str(pr['number']), pr['url'])}[/b]  {'merged' if pr['merged'] else ('draft' if pr['draft'] else pr['review'] or 'open')}  CI {pr['checks'] or '–'}  {'[ansi_bright_red]merge conflicts[/ansi_bright_red]  ' if pr.get('conflicts') else ''}{pr['size']}",
+            L += ["", f"[b]{link('#' + str(pr['number']), pr['url'])}[/b]  {'merged' if pr['merged'] else ('draft' if pr['draft'] else pr['review'] or 'open')}  CI {pr['checks'] or '–'}  {'[$red]merge conflicts[/$red]  ' if pr.get('conflicts') else ''}{pr['size']}",
                   escape(pr["title"]), f"[dim]updated {days(pr['updated_days'])} ago · opened {days(pr['created_days'])} ago[/dim]"]
             if pr["reviewers"]: L.append(f"[dim]reviewers:[/dim] {escape(', '.join(pr['reviewers']))}")
         for a in c.get("agents", []):
@@ -716,7 +734,7 @@ class RepoPick(ModalScreen):
                 Binding("down", "move(1)", show=False), Binding("up", "move(-1)", show=False)]
     DEFAULT_CSS = """
     RepoPick { align: center middle; background: ansi_default 60%; }
-    RepoPick > Static { width: 50; height: auto; border: round ansi_bright_yellow; padding: 1 2; background: ansi_default; color: ansi_default; }
+    RepoPick > Static { width: 50; height: auto; border: round $yellow; padding: 1 2; background: ansi_default; color: ansi_default; }
     """
 
     def __init__(self):
@@ -747,16 +765,16 @@ class Nudge(ModalScreen):
     BINDINGS = [Binding("escape", "dismiss", "close"), Binding("q", "dismiss", show=False), Binding("n", "dismiss", show=False)]
     DEFAULT_CSS = """
     Nudge { align: center middle; background: ansi_default 60%; }
-    Nudge > Static { width: 74; height: auto; border: round ansi_bright_green; padding: 1 2; background: ansi_default; color: ansi_default; }
+    Nudge > Static { width: 74; height: auto; border: round $green; padding: 1 2; background: ansi_default; color: ansi_default; }
     """
 
     def __init__(self, text, copied=True):
         super().__init__(); self.text = text; self.copied = copied
 
     def compose(self) -> ComposeResult:
-        body = "\n".join(f"[ansi_bright_white]{escape(l)}[/ansi_bright_white]" if l else "" for l in self.text.splitlines())
+        body = "\n".join(escape(l) for l in self.text.splitlines())
         head = "Copied to the clipboard" if self.copied else "No clipboard tool: select the text to copy it"
-        yield Static(f"[b ansi_bright_green]{head}[/b ansi_bright_green]\n\n{body}\n\n[dim]Esc to close[/dim]")
+        yield Static(f"[b $green]{head}[/b $green]\n\n{body}\n\n[dim]Esc to close[/dim]")
 
 
 class Confirm(ModalScreen):
@@ -764,14 +782,14 @@ class Confirm(ModalScreen):
     BINDINGS = [Binding("y", "yes", "yes"), Binding("enter", "yes", show=False), Binding("n", "no", "no"), Binding("escape", "no", show=False)]
     DEFAULT_CSS = """
     Confirm { align: center middle; background: ansi_default 60%; }
-    Confirm > Static { width: 80; height: auto; border: round ansi_bright_red; padding: 1 2; background: ansi_default; color: ansi_default; }
+    Confirm > Static { width: 80; height: auto; border: round $red; padding: 1 2; background: ansi_default; color: ansi_default; }
     """
 
     def __init__(self, question, items):
         super().__init__(); self.question = question; self.items = items
 
     def compose(self) -> ComposeResult:
-        body = [f"[b ansi_bright_red]{escape(self.question)}[/b ansi_bright_red]", ""] + [f"  [dim]{escape(i)}[/dim]" for i in self.items] + ["", "[dim]y / Enter to confirm · n / Esc to cancel[/dim]"]
+        body = [f"[b $red]{escape(self.question)}[/b $red]", ""] + [f"  [dim]{escape(i)}[/dim]" for i in self.items] + ["", "[dim]y / Enter to confirm · n / Esc to cancel[/dim]"]
         yield Static("\n".join(body))
 
     def action_yes(self):
@@ -785,7 +803,7 @@ class Help(ModalScreen):
     BINDINGS = [Binding("escape", "dismiss", "close"), Binding("question_mark", "dismiss", show=False), Binding("q", "dismiss", show=False)]
     DEFAULT_CSS = """
     Help { align: center middle; background: ansi_default 60%; }
-    Help > Static { width: 78; height: auto; border: round ansi_bright_yellow; padding: 1 3; background: ansi_default; color: ansi_default; }
+    Help > Static { width: 78; height: auto; border: round $yellow; padding: 1 3; background: ansi_default; color: ansi_default; }
     """
     KEYS = [
         ("Move", None),
@@ -826,9 +844,9 @@ class Help(ModalScreen):
         lines = ["[b]Desk[/b]"]
         for key, desc in self.KEYS:
             if desc is None:
-                lines += ["", f"[b ansi_bright_yellow]{key}[/b ansi_bright_yellow]"]
+                lines += ["", f"[b $yellow]{key}[/b $yellow]"]
             else:
-                lines.append(f"  [ansi_bright_white]{escape(key):<24}[/ansi_bright_white]{escape(desc)}")
+                lines.append(f"  [b]{escape(key):<24}[/b]{escape(desc)}")
         lines += ["", "[dim]Esc to close[/dim]"]
         yield Static("\n".join(lines))
 
@@ -849,6 +867,21 @@ def _pin_mouse_to_cells():
     _ld.LinuxDriver._enable_mouse_pixels = lambda self: None
 
 
+def _follow_color_scheme(app):
+    """Hand the terminal's colour scheme reports (CSI ?997;1n dark, ?997;2n light) to the app.
+
+    Textual does not know these reports and would replay them as key presses.
+    """
+    from textual import _xterm_parser as _xp
+    report = re.compile(r"\x1b\[\?997;([12])n")
+    orig = _xp.XTermParser.feed
+    def feed(self, data):
+        for m in report.finditer(data):
+            app.call_from_thread(app.set_dark, m[1] == "1")
+        return orig(self, report.sub("", data))
+    _xp.XTermParser.feed = feed
+
+
 if __name__ == "__main__":
     _pin_mouse_to_cells()
     if os.environ.get("DESK_TRACE_RAW"):
@@ -860,4 +893,6 @@ if __name__ == "__main__":
                 f.write(repr(data) + "\n")
             return _orig(self, data)
         _xp.XTermParser.feed = _feed
-    Desk().run()
+    app = Desk()
+    _follow_color_scheme(app)
+    app.run()
