@@ -1,0 +1,2 @@
+# desk.py patches textual._xterm_parser, a private module; a Textual upgrade can break it.
+textual==8.2.8

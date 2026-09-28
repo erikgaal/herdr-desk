@@ -1,0 +1,44 @@
+# Desk settings. Copy to ~/.config/desk/config.toml (or point $DESK_CONFIG at
+# another path). Every key is optional; the values shown are the defaults.
+
+# Directory whose immediate children are the git repos the board reads.
+repos_dir = "~/Developer"
+
+# Repo preselected when `l` on a TODO card asks which repo to start in.
+default_repo = ""
+
+[linear]
+# The API key comes from $LINEAR_API_KEY, else from the output of this command.
+# On macOS the default reads the keychain item with service "linear-api":
+#   security add-generic-password -s linear-api -a "$USER" -w <key>
+# Elsewhere there is no default; for example: key_command = "pass show linear/api-key"
+# key_command = "security find-generic-password -s linear-api -w"
+
+# Workspace slug in issue URLs (linear.app/<workspace>/issue/...). Read from
+# Linear when empty.
+workspace = ""
+
+# Team keys that mark ticket identifiers in branch names and PR titles, such
+# as "ENG" for ENG-123. Every team in the workspace when empty.
+ticket_prefixes = []
+
+[agent]
+# Herdr agent kind that `l` starts.
+kind = "claude"
+
+# First prompt for a session started on a Linear issue. Fields: {id} {title}
+# {url} {branch}. The default names the issue and says the branch is Linear's.
+# brief = """
+# Start work on Linear issue {id}: {title}
+# {url}
+# """
+
+[commands]
+# `v`: reviews a PR. Called with two arguments, <owner/repo> <number>.
+# review = "bash ~/bin/review-pr.sh"
+
+# `T`: closes stale sessions. Called with --dry-run first to preview; must print
+# one "close <workspace>" line per workspace it closes.
+# tidy = "~/.local/bin/desk-tidy"
+# Log the tidy command writes resume lines to, shown after it runs.
+# tidy_log = "~/.local/state/desk/tidy.log"
