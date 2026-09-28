@@ -192,11 +192,23 @@ class FoldedDrafts(Static):
         super().__init__(f"▸ {n} draft PRs older than a week  [dim](D to show)[/dim]")
 
 
+class Lane(VerticalScroll, inherit_bindings=False):
+    """A scroll area without key bindings: arrows move between cards, and focus keeps the card in view.
+
+    VerticalScroll and HorizontalScroll bind the arrow keys to scrolling, and as ancestors of the
+    focused card they would take the arrows before the app's navigation bindings see them.
+    """
+
+
+class Board(HorizontalScroll, inherit_bindings=False):
+    """The row of columns, scrolled sideways by focus and the mouse only; see Lane."""
+
+
 class Column(Vertical):
     DEFAULT_CSS = """
     Column { width: 64; border: round ansi_bright_black; padding: 0; background: ansi_default; }
     Column > .title { text-style: bold; padding: 0 1; height: 1; background: ansi_default; }
-    Column > VerticalScroll { height: 1fr; padding: 0 1; background: ansi_default; scrollbar-color: ansi_bright_black; scrollbar-background: ansi_default; }
+    Column > Lane { height: 1fr; padding: 0 1; background: ansi_default; scrollbar-color: ansi_bright_black; scrollbar-background: ansi_default; }
     """
 
     def __init__(self, key, title, color):
@@ -205,7 +217,7 @@ class Column(Vertical):
 
     def compose(self) -> ComposeResult:
         yield Static("", classes="title")
-        yield VerticalScroll()
+        yield Lane()
 
     def fill(self, cards, needle="", show_drafts=False):
         # Lanes share one fixed width (see Column CSS); the board scrolls sideways when they do not fit.
@@ -221,7 +233,7 @@ class Column(Vertical):
         folded = [c for c in cards if c.get("stale_draft")] if not show_drafts and not needle else []
         shown = [c for c in cards if c not in folded]
         self.query_one(".title", Static).update(f"[{self.color}]{self.title_text} ({len(cards)})[/{self.color}]")
-        scroll = self.query_one(VerticalScroll)
+        scroll = self.query_one(Lane)
         scroll.remove_children()
         for c in shown:
             scroll.mount(Card(c, self.color))
@@ -252,7 +264,7 @@ class Desk(App):
         Binding("i", "open_issue", "open issue"),
         Binding("n", "nudge", "copy nudge"),
         Binding("v", "review", "review PR"),
-        Binding("l", "launch", "launch agent"),
+        Binding("a", "launch", "launch agent"),
         Binding("c", "close_ws", "close session"),
         Binding("x", "reap", "reap"),
         Binding("X", "reap_force", "force reap", show=False),
@@ -266,12 +278,10 @@ class Desk(App):
         Binding("1", "goto_col(0)", show=False), Binding("2", "goto_col(1)", show=False),
         Binding("3", "goto_col(2)", show=False), Binding("4", "goto_col(3)", show=False),
         Binding("5", "goto_col(4)", show=False),
-        # h and l are taken by launch, so horizontal movement is ctrl+h / ctrl+l plus arrows.
-        Binding("left", "col(-1)", "←", show=False), Binding("right", "col(1)", "→", show=False),
-        Binding("ctrl+h", "col(-1)", show=False), Binding("ctrl+l", "col(1)", show=False),
+        Binding("left", "col(-1)", show=False), Binding("right", "col(1)", show=False),
+        Binding("h", "col(-1)", show=False), Binding("l", "col(1)", show=False),
         Binding("up", "row(-1)", show=False), Binding("down", "row(1)", show=False),
         Binding("k", "row(-1)", show=False), Binding("j", "row(1)", show=False),
-        Binding("ctrl+k", "row(-1)", show=False), Binding("ctrl+j", "row(1)", show=False),
         Binding("q", "quit", "quit"),
     ]
 
@@ -283,7 +293,7 @@ class Desk(App):
         filter_box = Input(placeholder="filter: repo, branch, ticket, title…  (Esc clears)", id="filter")
         filter_box.can_focus = False
         yield filter_box
-        with HorizontalScroll(id="board"):
+        with Board(id="board"):
             for key, title, color in COLUMNS:
                 yield Column(key, title, color)
         yield Footer()
@@ -376,7 +386,7 @@ class Desk(App):
         if c and c.get("workspace_id"):
             sh("herdr", "workspace", "focus", c["workspace_id"])
         elif c:
-            self.notify("no open workspace — press l to launch one", severity="warning")
+            self.notify("no open workspace — press a to launch one", severity="warning")
 
     def action_open_url(self, url):
         webbrowser.open(url)
@@ -765,7 +775,7 @@ class Help(ModalScreen):
     KEYS = [
         ("Move", None),
         ("j  k  ↑  ↓", "previous / next card"),
-        ("ctrl+h  ctrl+l  ←  →", "previous / next column (board scrolls sideways)"),
+        ("h  l  ←  →", "previous / next column (board scrolls sideways)"),
         ("shift+wheel", "scroll the board sideways"),
         ("1  2  3  4  5", "jump to a column"),
         ("Look", None),
@@ -780,7 +790,7 @@ class Help(ModalScreen):
         ("i", "open the Linear issue"),
         ("n", "copy a Slack nudge for this PR's reviewer"),
         ("v", "review this PR with the configured review command"),
-        ("l", "launch an agent here · on a TODO card: pick a repo, create the worktree"),
+        ("a", "launch an agent here · on a TODO card: pick a repo, create the worktree"),
         ("c", "close the session (the agent's resume brings it back)"),
         ("x", "remove the worktree, close its session (refuses when dirty)"),
         ("X", "force-remove a dirty worktree after confirming what is discarded"),

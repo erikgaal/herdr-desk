@@ -27,7 +27,7 @@ agent, or an open/recently merged PR. Worktrees with neither agent nor PR are
 left to wt-reap and do not appear.
 
 Column rules, first match wins:
-  todo      — an assigned Linear issue in a Todo state with nothing local. `l`
+  todo      — an assigned Linear issue in a Todo state with nothing local. `a`
               on it asks for a repo and starts a worktree on Linear's branch name.
   your_move — PR has changes requested, failing checks, merge conflicts, or is a draft older than
               a day; or an agent is `blocked` (needs an approval) or `done`

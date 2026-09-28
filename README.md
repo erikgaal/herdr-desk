@@ -18,7 +18,7 @@ A card is one branch. For example, the branch `eng-142-retry-webhooks` with a wo
 - Python 3.11 or newer
 - `git`, `jq`, `curl`
 - [`gh`](https://cli.github.com), logged in: PRs come from `gh api graphql`
-- [`wt` (worktrunk)](https://github.com/max-sixty/worktrunk): launching an agent (`l`) and removing a worktree (`x`) use it
+- [`wt` (worktrunk)](https://github.com/max-sixty/worktrunk): launching an agent (`a`) and removing a worktree (`x`) use it
 - Optional: a Linear personal API key for the TODO column and for issue titles on cards
 
 macOS and Linux are supported. On Linux, copying a nudge needs `wl-copy`, `xclip` or `xsel`.
@@ -39,7 +39,7 @@ Settings live in `~/.config/desk/config.toml`, or in the file `$DESK_CONFIG` poi
 
 ```toml
 repos_dir = "~/code"          # its direct children are the repos the board reads
-default_repo = "api"          # preselected when `l` on a TODO card asks for a repo
+default_repo = "api"          # preselected when `a` on a TODO card asks for a repo
 
 [linear]
 ticket_prefixes = ["ENG"]     # default: every team key in your Linear workspace
@@ -64,9 +64,10 @@ Press `?` on the board for the full list. The main keys:
 
 | Key | Action |
 |---|---|
+| `h` `j` `k` `l` or arrows | move between columns and cards |
 | `Enter` | focus the card's Herdr workspace |
 | `o` / `i` | open the PR / the Linear issue |
-| `l` | start an agent in the card's worktree (on a TODO card, create the worktree first) |
+| `a` | start an agent in the card's worktree (on a TODO card, create the worktree first) |
 | `n` | copy a short review request for the PR |
 | `x` / `X` | remove the worktree and close its session / force-remove a dirty one after confirmation |
 | `/` | filter every column as you type |

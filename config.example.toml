@@ -4,7 +4,7 @@
 # Directory whose immediate children are the git repos the board reads.
 repos_dir = "~/Developer"
 
-# Repo preselected when `l` on a TODO card asks which repo to start in.
+# Repo preselected when `a` on a TODO card asks which repo to start in.
 default_repo = ""
 
 [linear]
@@ -23,7 +23,7 @@ workspace = ""
 ticket_prefixes = []
 
 [agent]
-# Herdr agent kind that `l` starts.
+# Herdr agent kind that `a` starts.
 kind = "claude"
 
 # First prompt for a session started on a Linear issue. Fields: {id} {title}
