@@ -614,15 +614,19 @@ class Desk(App):
             alert(f"{label}: launch failed", msg, "request")
 
         repo_root = os.path.join(config.REPOS_DIR, c["repo"])
-        self.job(c, "creating the worktree" if c.get("create") else "switching to the worktree")
-        args = ["wt", "-C", repo_root, "switch", "--no-cd", "-y", "--format=json"] + (["-c"] if c.get("create") else []) + [c["branch"]]
-        r = sh(*args)
-        try:
-            path = json.loads(r.stdout).get("path") or c["path"]
-        except Exception:
-            path = c["path"]
+        path = c["path"] if not c.get("create") and c.get("path") and os.path.isdir(c["path"]) else None
+        # An existing worktree needs nothing from wt: its switch hooks (a fetch, for one) are
+        # for arriving in a shell, and cost seconds, or minutes on a stalling network.
         if not path:
-            return failed("wt switch failed: " + ((r.stderr or r.stdout).strip().splitlines() or ["no output"])[-1][:140])
+            self.job(c, "creating the worktree" if c.get("create") else "switching to the worktree")
+            args = ["wt", "-C", repo_root, "switch", "--no-cd", "-y", "--format=json"] + (["-c"] if c.get("create") else []) + [c["branch"]]
+            r = sh(*args)
+            try:
+                path = json.loads(r.stdout).get("path")
+            except Exception:
+                path = None
+            if not path:
+                return failed("wt switch failed: " + ((r.stderr or r.stdout).strip().splitlines() or ["no output"])[-1][:140])
         self.job(c, "opening the workspace")
         o = sh("herdr", "worktree", "open", "--cwd", repo_root, "--path", path, "--label", label, "--no-focus", "--json")
         try:
@@ -633,7 +637,15 @@ class Desk(App):
         if not name[:1].isalpha():
             name = "t-" + name
         self.job(c, f"starting {config.AGENT_KIND}")
-        sh("herdr", "agent", "start", name, "--kind", config.AGENT_KIND, "--pane", pane)
+        # A new pane refuses an agent (agent_pane_busy) until its shell is up, a few seconds
+        # after the workspace opens; one attempt straight away would leave it without one.
+        for _ in range(60):
+            a = sh("herdr", "agent", "start", name, "--kind", config.AGENT_KIND, "--pane", pane)
+            if a.returncode == 0:
+                break
+            time.sleep(0.5)
+        else:
+            return failed(f"{config.AGENT_KIND} did not start: " + ((a.stdout or a.stderr).strip().splitlines() or ["no output"])[-1][:140])
         if not brief and issue:
             fields = {"id": issue["id"], "title": issue["title"], "url": issue["url"], "branch": c["branch"]}
             brief = fill(config.BRIEF, config.DEFAULT_BRIEF, fields)
