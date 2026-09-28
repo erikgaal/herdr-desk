@@ -86,6 +86,10 @@ Press `?` on the board for the full list. The main keys:
 | `x` / `X` | remove the worktree and close its session / force-remove a dirty one after confirmation |
 | `/` | filter every column as you type |
 
+## Background jobs
+
+`a`, `f`, `v` and `x` run in the background, and the board never takes focus from what you moved on to. A job shows its progress on its card, `⟳ switching to the worktree 42s`, and a failed job keeps its reason there, `✗ wt switch failed: …`, until the card's next job. When a launch or review ends, or a new agent waits on a trust prompt that only you can answer, a Herdr notification appears over whatever workspace you are in.
+
 ## How it works
 
 `collect.py` joins the sources on `(repo, branch)` and writes `~/.local/state/desk/board.json`. `desk.py` is the Textual UI. It reads that file and runs the collector again every 5 minutes, or when you press `r`. The UI never changes state itself. Every action calls `herdr`, `gh`, `wt` or a configured hook.

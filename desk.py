@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 
 from textual import work
@@ -58,6 +59,24 @@ def ticket_url(card, board):
     if card.get("ticket") and workspace:
         return f"https://linear.app/{workspace}/issue/{card['ticket'].upper()}"
     return None
+
+
+def elapsed(since):
+    """Seconds, then minutes: a job's age, where the board's day/hour ages would all read 0h."""
+    secs = int(time.time() - since)
+    return f"{secs}s" if secs < 60 else f"{secs // 60}m"
+
+
+def job_key(card):
+    """What a job is filed under: the branch, which a TODO card shares with the worktree card
+    that replaces it once `a` creates the worktree; the path for a card with no branch."""
+    return card.get("branch") or card.get("path") or ""
+
+
+def alert(title, body, sound="done"):
+    """A Herdr notification: shown over whatever workspace has focus, so a job that ends while
+    you are elsewhere still reaches you. `request` is the sound for something that needs you."""
+    sh("herdr", "notification", "show", title, "--body", body, "--sound", sound)
 
 
 def fill(template, default, fields):
@@ -149,6 +168,14 @@ class Card(Static):
             ids.append(f"[dim]{escape(fit(tag, max(10, w - used - 2 * len(ids))))}[/dim]")
         if ids:
             lines.append("  ".join(ids))
+
+        # 2b. A job this board started on the card: progress while it runs, the reason when it failed.
+        job = self.app.jobs.get(job_key(c))
+        if job:
+            if job["state"] == "failed":
+                lines.append(f"[b $red]✗ {escape(fit(job['text'], w - 2))}[/b $red]")
+            else:
+                lines.append(f"[b $yellow]⟳ {escape(fit(job['text'], w - 8))} {elapsed(job['since'])}[/b $yellow]")
 
         # 3. Status. The words carry the colour; the reason line below is dropped when it would repeat them.
         said = set()
@@ -328,12 +355,38 @@ class Desk(App):
             self.refresh_css()
             self.render_board()
 
+    jobs = {}
+
+    def set_job(self, card, text, state="running"):
+        """Show a job's progress on its card, or clear it with state=None. Main thread only;
+        workers go through `job()`. A failed job stays until the card's next job replaces it."""
+        key = job_key(card)
+        if state is None:
+            self.jobs.pop(key, None)
+        else:
+            since = self.jobs[key]["since"] if key in self.jobs and self.jobs[key]["state"] == "running" == state else time.time()
+            self.jobs[key] = {"text": text, "state": state, "since": since}
+        for w in self.query(Card):
+            if job_key(w.data) == key:
+                w.refresh(layout=True)
+
+    def job(self, card, text, state="running"):
+        self.call_from_thread(self.set_job, card, text, state)
+
+    def _tick(self):
+        # Elapsed time on running jobs; nothing to redraw when none runs.
+        running = {k for k, j in self.jobs.items() if j["state"] == "running"}
+        for w in self.query(Card):
+            if job_key(w.data) in running:
+                w.refresh()
+
     def on_mount(self):
         # Ask to be told the terminal's dark/light scheme now and whenever it changes (mode 2031).
         self._driver.write("\x1b[?2031h\x1b[?996n")
         self.load(from_disk=True)
         # 5 minutes: GitHub's GraphQL budget is shared with every other tool and agent on this account.
         self.set_interval(300, self.load)
+        self.set_interval(1, self._tick)
 
     def on_unmount(self):
         self._driver.write("\x1b[?2031l")
@@ -485,15 +538,19 @@ class Desk(App):
         m = re.search(r"github\.com/([^/]+/[^/]+)/pull/(\d+)", pr["url"])
         if not m:
             self.notify(f"cannot read a repo from {pr['url']}", severity="error"); return
-        self.notify(f"preparing a review of #{pr['number']} …", timeout=20)
-        self._review(m.group(1), m.group(2))
+        self.set_job(c, f"preparing a review of #{pr['number']}")
+        self._review(dict(c), m.group(1), m.group(2))
 
     @work(thread=True, group="review")
-    def _review(self, slug, num):
+    def _review(self, c, slug, num):
         r = sh(*config.REVIEW_COMMAND, slug, num)
         if r.returncode != 0:
             msg = (r.stderr.strip().splitlines() or ["review failed"])[-1]
-            self.call_from_thread(self.notify, msg, severity="error", timeout=12)
+            self.job(c, f"review failed: {msg}", "failed")
+            alert(f"Review of #{num} failed", msg, "request")
+            return
+        self.job(c, None, None)
+        alert(f"Review of #{num} is ready", f"{slug}#{num}")
 
     def action_fix(self):
         """Hand a PR's merge conflicts or red CI to an agent: the card's idle agent when it has
@@ -518,7 +575,7 @@ class Desk(App):
             self.load(); return
         if agents:
             self.notify(f"the session here is {agents[0]['status']}; press f again once it is idle", severity="warning"); return
-        self.notify(f"launching {config.AGENT_KIND} to fix #{pr['number']} …", timeout=20)
+        self.set_job(c, f"launching {config.AGENT_KIND} to fix #{pr['number']}")
         self._launch(dict(c), brief=text)
 
     def action_launch(self):
@@ -533,16 +590,31 @@ class Desk(App):
             def chosen(repo):
                 if repo:
                     c2 = dict(c, repo=repo, create=True)
-                    self.notify(f"creating {c['branch']} in {repo} …", timeout=30)
+                    self.set_job(c2, f"creating {c['branch']} in {repo}")
                     self._launch(c2)
             self.push_screen(RepoPick(), chosen); return
-        self.notify(f"launching {config.AGENT_KIND} on {c['branch']} …", timeout=20)
+        self.set_job(c, f"launching {config.AGENT_KIND}")
         self._launch(dict(c))
 
     @work(thread=True, group="launch")
     def _launch(self, c, brief=None):
-        notify = lambda *a, **k: self.call_from_thread(self.notify, *a, **k)
+        """Worktree, workspace, agent, brief, all in the background.
+
+        The workspace opens without focus: `wt switch` can take minutes (its hooks install
+        dependencies), and taking focus at the end would land your typing, in whatever you
+        moved on to meanwhile, in the new session. Progress shows on the card; the end, or
+        a trust prompt only you can answer, comes as a Herdr notification.
+        """
+        issue = c.get("issue")
+        # A Linear branch name is long; the issue id is what you scan the sidebar for.
+        label = issue["id"] if issue else c["branch"]
+
+        def failed(msg):
+            self.job(c, msg, "failed")
+            alert(f"{label}: launch failed", msg, "request")
+
         repo_root = os.path.join(config.REPOS_DIR, c["repo"])
+        self.job(c, "creating the worktree" if c.get("create") else "switching to the worktree")
         args = ["wt", "-C", repo_root, "switch", "--no-cd", "-y", "--format=json"] + (["-c"] if c.get("create") else []) + [c["branch"]]
         r = sh(*args)
         try:
@@ -550,46 +622,55 @@ class Desk(App):
         except Exception:
             path = c["path"]
         if not path:
-            notify("wt switch failed", severity="error"); return
-        issue = c.get("issue")
-        # A Linear branch name is long; the issue id is what you scan the sidebar for.
-        label = issue["id"] if issue else c["branch"]
-        o = sh("herdr", "worktree", "open", "--cwd", repo_root, "--path", path, "--label", label, "--focus", "--json")
+            return failed("wt switch failed: " + ((r.stderr or r.stdout).strip().splitlines() or ["no output"])[-1][:140])
+        self.job(c, "opening the workspace")
+        o = sh("herdr", "worktree", "open", "--cwd", repo_root, "--path", path, "--label", label, "--no-focus", "--json")
         try:
             pane = json.loads(o.stdout)["result"]["root_pane"]["pane_id"]
         except Exception:
-            notify("herdr worktree open failed", severity="error"); return
+            return failed("herdr worktree open failed: " + ((o.stderr or o.stdout).strip().splitlines() or ["no output"])[-1][:140])
         name = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in (issue["id"] if issue else c["branch"]).lower()).strip("-")[:28]
         if not name[:1].isalpha():
             name = "t-" + name
+        self.job(c, f"starting {config.AGENT_KIND}")
         sh("herdr", "agent", "start", name, "--kind", config.AGENT_KIND, "--pane", pane)
         if not brief and issue:
             fields = {"id": issue["id"], "title": issue["title"], "url": issue["url"], "branch": c["branch"]}
             brief = fill(config.BRIEF, config.DEFAULT_BRIEF, fields)
-        if brief:
-            notify("worktree ready; the agent gets its brief once it is past the trust prompt", timeout=12)
-            self._brief(name, brief)
+        if brief and not self._brief(c, label, name, brief):
+            return
+        self.job(c, None, None)
+        alert(f"{label} is ready", f"{config.AGENT_KIND} is " + ("working on its brief" if brief else "waiting in its workspace")
+              + ". Enter on its Desk card goes there.")
         self.load()
 
-    def _brief(self, name, text):
-        """Hand a fresh session its first prompt.
+    def _brief(self, c, label, name, text):
+        """Hand a fresh session its first prompt; False when it never became ready for one.
 
         The agent cannot take the brief on its command line (Herdr refuses arguments
         with newlines), and a new worktree opens on the folder-trust dialog, which
-        Herdr reports as `blocked`. The trust answer is yours, so this waits for
-        the session to reach idle and only then submits the brief.
+        Herdr reports as `blocked`. The trust answer is yours, so this asks for it once
+        and submits the brief when the session reaches idle.
         """
-        import time
+        asked = False
         for _ in range(180):
             r = sh("herdr", "agent", "get", name)
             try:
                 status = json.loads(r.stdout)["result"]["agent"]["agent_status"]
             except Exception:
-                return
+                self.job(c, "the agent exited before it got its brief", "failed")
+                return False
             if status in ("idle", "done"):
                 sh("herdr", "agent", "prompt", name, text)
-                return
+                return True
+            if status == "blocked" and not asked:
+                asked = True
+                self.job(c, f"waiting for you: answer the trust prompt in {label}")
+                alert(f"{label} needs you", "Answer the trust prompt so the agent can take its brief.", "request")
             time.sleep(2)
+        self.job(c, "the agent was not ready within 6 minutes; the brief was not sent", "failed")
+        alert(f"{label}: brief not sent", "The agent was not ready within 6 minutes.", "request")
+        return False
 
     def action_close_ws(self):
         c = self.card()
@@ -611,11 +692,11 @@ class Desk(App):
             dirty = sh("git", "-C", c["path"], "status", "--porcelain").stdout.splitlines()
             def go(yes):
                 if yes:
-                    self.notify(f"force-removing {os.path.basename(c['path'])} …", timeout=30)
+                    self.set_job(c, f"force-removing {os.path.basename(c['path'])}")
                     self._reap(dict(c), force=True)
             self.push_screen(Confirm(f"Discard {len(dirty)} uncommitted change(s) and remove the worktree?", dirty[:12]), go)
             return
-        self.notify(f"reaping {os.path.basename(c['path'])} …", timeout=30)
+        self.set_job(c, f"removing {os.path.basename(c['path'])}")
         self._reap(dict(c))
 
     def action_reap_force(self):
@@ -623,7 +704,6 @@ class Desk(App):
 
     @work(thread=True, group="reap")
     def _reap(self, c, force=False):
-        import time
         repo_root = os.path.join(config.REPOS_DIR, c["repo"])
         if c.get("workspace_id"):
             sh("herdr", "workspace", "close", c["workspace_id"])
@@ -636,15 +716,16 @@ class Desk(App):
                 msg = f"{os.path.basename(c['path'])} has {len(dirty)} uncommitted file(s): {', '.join(d.split()[-1] for d in dirty[:3])}{'…' if len(dirty) > 3 else ''}  —  X to force-remove"
             else:
                 msg = f"wt remove failed: {text.splitlines()[0][:140] if text else 'unknown error'}"
-            self.call_from_thread(self.notify, msg, severity="error", timeout=15)
+            self.job(c, msg, "failed")
             return
         # worktrunk can return before the directory is fully deleted; give it up to a minute.
         deadline = time.time() + 60
         while os.path.isdir(c["path"]) and time.time() < deadline:
             time.sleep(1)
-        gone = not os.path.isdir(c["path"])
-        self.call_from_thread(self.notify, f"reaped {os.path.basename(c['path'])}" if gone else "wt remove returned but the directory is still there",
-                              severity="information" if gone else "error", timeout=10)
+        if os.path.isdir(c["path"]):
+            self.job(c, "wt remove returned but the directory is still there", "failed")
+            return
+        self.job(c, None, None)
         self.load()
 
     def action_tidy(self):
