@@ -27,6 +27,20 @@ DEFAULT_BRIEF = (
     "else: it is the spec for this branch."
 )
 
+# Briefs for `f`, which hands a PR's mechanical fix to an agent. Fields: {number} {url} {branch} {base}.
+DEFAULT_FIX_CONFLICTS = (
+    "PR #{number} ({url}) on branch {branch} has merge conflicts with {base}. Bring {base} into "
+    "this branch the way the repo does it (rebase or merge), resolve every conflict so both sides' "
+    "intent survives, run the tests, and push. Stop and ask when a conflict needs a decision "
+    "about behaviour rather than code."
+)
+DEFAULT_FIX_CHECKS = (
+    "PR #{number} ({url}) on branch {branch} has failing CI checks. Find them with "
+    "`gh pr checks {number}` and read the failing logs with `gh run view <run-id> --log-failed`. "
+    "Fix the cause, not the symptom: a test is changed only when the test itself is wrong. Run "
+    "the failing checks locally where you can, then push. Stop and ask when the fix changes behaviour."
+)
+
 
 def _load():
     try:
@@ -44,6 +58,7 @@ _raw = _load()
 _linear = _raw.get("linear", {})
 _agent = _raw.get("agent", {})
 _commands = _raw.get("commands", {})
+_github = _raw.get("github", {})
 
 
 def _command(value):
@@ -65,8 +80,13 @@ TICKET_PREFIXES = [p.upper() for p in _linear.get("ticket_prefixes", [])]
 LINEAR_KEY_COMMAND = _command(_linear.get("key_command")) or (
     ["security", "find-generic-password", "-s", "linear-api", "-w"] if sys.platform == "darwin" else [])
 
+# Review requests made to a team you are on, not only to you by name.
+TEAM_REVIEW_REQUESTS = bool(_github.get("team_review_requests", False))
+
 AGENT_KIND = _agent.get("kind", "claude")
 BRIEF = _agent.get("brief", DEFAULT_BRIEF)
+FIX_CONFLICTS = _agent.get("fix_conflicts", DEFAULT_FIX_CONFLICTS)
+FIX_CHECKS = _agent.get("fix_checks", DEFAULT_FIX_CHECKS)
 
 # Optional hooks. Without one, its key on the board reports that it is not configured.
 REVIEW_COMMAND = _command(_commands.get("review"))

@@ -26,6 +26,11 @@ workspace = ""
 # as "ENG" for ENG-123. Every team in the workspace when empty.
 ticket_prefixes = []
 
+[github]
+# Also show PRs that request a review from a team you are on. Off: only
+# requests to you by name.
+team_review_requests = false
+
 [agent]
 # Herdr agent kind that `a` starts.
 kind = "claude"
@@ -36,6 +41,12 @@ kind = "claude"
 # Start work on Linear issue {id}: {title}
 # {url}
 # """
+
+# Briefs `f` sends to fix a PR. Fields: {number} {url} {branch} {base}. The
+# defaults ask for conflicts resolved against {base}, or for the failing checks
+# found with `gh pr checks` and fixed at their cause, then a push.
+# fix_conflicts = "..."
+# fix_checks = "..."
 
 [commands]
 # `v`: reviews a PR. Called with two arguments, <owner/repo> <number>.

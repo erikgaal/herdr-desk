@@ -10,7 +10,8 @@ The board is a view over three sources that know nothing of each other:
   * git     — every worktree of every primary repo under `repos_dir`, keyed by
               branch, including colocated jujutsu repos (read-only here).
   * GitHub  — the user's open PRs and PRs merged in the last 7 days, per repo,
-              with review decision, check status and requested reviewers.
+              with review decision, check status and requested reviewers; and
+              other people's open PRs that request the user's review.
   * Linear  — issues assigned to the user that are started or in review, read
               with a personal API key (see config.py for where it comes from).
               Optional: with no key, cards simply carry no issue.
@@ -29,7 +30,8 @@ left to wt-reap and do not appear.
 Column rules, first match wins:
   todo      — an assigned Linear issue in a Todo state with nothing local. `a`
               on it asks for a repo and starts a worktree on Linear's branch name.
-  your_move — a ready PR has changes requested, failing checks or merge conflicts;
+  your_move — someone asked you to review their PR; or a ready PR
+              has changes requested, failing checks or merge conflicts;
               or an agent is `blocked` (needs an approval) or `done` (finished,
               unseen); or a PR is a draft older than a day; or an agent is idle
               with no PR at all, waiting for its next prompt; or a Linear issue
@@ -116,13 +118,15 @@ def worktrees(repo):
             yield d["worktree"], d.get("branch", "").replace("refs/heads/", "")
 
 
-PR_FIELDS = """number title url headRefName isDraft updatedAt createdAt mergedAt additions deletions
+PR_FIELDS = """number title url headRefName baseRefName isDraft updatedAt createdAt mergedAt additions deletions
   repository { nameWithOwner }"""
 # Review state, mergeability and checks are what makes the search slow enough for GitHub to
 # answer 504, so only open PRs, where they decide the column, ask for them.
 OPEN_FIELDS = PR_FIELDS + """ reviewDecision mergeable mergeStateStatus
   reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } ... on Team { name } } } }
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"""
+# PRs others asked you to review: no review state or checks, since those decide nothing for you.
+REVIEW_FIELDS = PR_FIELDS + " author { login }"
 SEARCH_LIMIT = 100
 SEARCH = 'query($q: String!) { search(query: $q, type: ISSUE, first: %d) { issueCount nodes { ... on PullRequest { %%s } } } }' % SEARCH_LIMIT
 GITHUB_ERROR = f"{STATE_DIR}/github-error.txt"
@@ -180,19 +184,28 @@ def search_prs(q, fields):
 
 def all_prs():
     """All of the user's open PRs plus PRs merged in the last 7 days, in two GraphQL calls
-    total rather than two per repo. Returns (prs_by_repo_slug, error); error is "" on success,
+    total rather than two per repo, and the open PRs that ask the user for a review (by name,
+    or also through a team with `github.team_review_requests`).
+    Returns (prs_by_repo_slug, review_requests, error); error is "" on success,
     else the reason GitHub refused or answered short, and the caller then keeps the previous
     snapshot under whatever PRs did arrive. The reason is also written to github-error.txt
     with the time it happened."""
     since = (dt.date.today() - dt.timedelta(days=7)).isoformat()
-    by_slug, errors = {}, []
+    by_slug, reviews, errors = {}, [], []
+    # user-review-requested asks for requests to you by name; review-requested adds those to
+    # every team you are on, which on a large team is most of its PRs.
+    review_q = "review-requested" if config.TEAM_REVIEW_REQUESTS else "user-review-requested"
     for q, fields in (("is:pr author:@me is:open archived:false", OPEN_FIELDS),
-                      (f"is:pr author:@me is:merged merged:>={since} archived:false", PR_FIELDS)):
+                      (f"is:pr author:@me is:merged merged:>={since} archived:false", PR_FIELDS),
+                      (f"is:pr {review_q}:@me is:open archived:false", REVIEW_FIELDS)):
         nodes, error = search_prs(q, fields)
         if error:
             errors.append(error)
             with open(GITHUB_ERROR, "a") as f:
                 f.write(f"{dt.datetime.now():%FT%T} {q}: {error}\n")
+        if fields is REVIEW_FIELDS:
+            reviews += [n for n in nodes if n]
+            continue
         for n in nodes:
             if not n:
                 continue
@@ -200,7 +213,7 @@ def all_prs():
             n["statusCheckRollup"] = [{"state": roll.get("state", "")}] if roll else []
             n["reviewRequests"] = [r.get("requestedReviewer") or {} for r in (n.get("reviewRequests") or {}).get("nodes", [])]
             by_slug.setdefault(n["repository"]["nameWithOwner"].lower(), []).append(n)
-    return by_slug, "; ".join(errors)
+    return by_slug, reviews, "; ".join(errors)
 
 
 def checks(pr):
@@ -312,6 +325,8 @@ def place(c):
     reason = None
     if c.get("todo"):
         return "todo", None
+    if c.get("review_request"):
+        return "your_move", f"review requested by {c['pr']['author']}"
     ready = pr and not pr["merged"] and not pr["draft"]
     if ready and pr["review"] == "CHANGES_REQUESTED":
         reason = "changes requested"
@@ -421,7 +436,7 @@ def collect():
                     previous_conflicts[(c["repo"], c["branch"])] = c["pr"].get("conflicts")
     except Exception:
         pass
-    prs_by_slug, github_error = all_prs()
+    prs_by_slug, review_prs, github_error = all_prs()
     if github_error:
         # GitHub refused or answered short (a 504, a network timeout, the rate limit, a partial
         # result). Reuse the PRs from the last board so cards do not vanish; the PRs that did
@@ -430,7 +445,9 @@ def collect():
             prev = json.load(open(BOARD))
             for col in prev["columns"].values():
                 for c in col:
-                    if c.get("pr"):
+                    if c.get("review_request"):
+                        cards[("review", c["pr"]["url"])] = c
+                    elif c.get("pr"):
                         card(c["repo"], c["branch"])["pr"] = c["pr"]
         except Exception:
             pass
@@ -441,7 +458,7 @@ def collect():
                 c = card(name, pr["headRefName"])
                 c["pr"] = {
                     "number": pr["number"], "title": pr["title"], "url": pr["url"], "draft": pr["isDraft"],
-                    "review": pr.get("reviewDecision") or "", "checks": checks(pr),
+                    "base": pr.get("baseRefName") or "", "review": pr.get("reviewDecision") or "", "checks": checks(pr),
                     "reviewers": [r.get("login") or r.get("name") for r in pr.get("reviewRequests") or []],
                     "updated_days": iso_age_days(pr.get("updatedAt")), "created_days": iso_age_days(pr.get("createdAt")),
                     "merged": bool(pr.get("mergedAt")), "size": f'+{pr.get("additions",0)} -{pr.get("deletions",0)}',
@@ -456,6 +473,22 @@ def collect():
                 }
                 if not c["ticket"]:
                     c["ticket"] = ticket(pr["title"])
+
+    # A review request is its own card: the branch is someone else's, so it never joins a
+    # worktree or session of yours, and the repo needs no clone for the review command.
+    local = {sl.lower(): os.path.basename(p) for p, slugs in repos for sl in slugs}
+    for pr in review_prs:
+        slug = pr["repository"]["nameWithOwner"]
+        cards[("review", pr["url"])] = {
+            "repo": local.get(slug.lower(), slug.split("/")[-1]), "branch": pr["headRefName"], "path": None,
+            "agents": [], "workspace_id": None, "ticket": ticket(pr["headRefName"]) or ticket(pr["title"]),
+            "review_request": True,
+            "pr": {"number": pr["number"], "title": pr["title"], "url": pr["url"], "draft": pr["isDraft"],
+                   "base": pr.get("baseRefName") or "", "review": "", "checks": "", "reviewers": [], "conflicts": False,
+                   "mergeable": False, "merged": False, "author": (pr.get("author") or {}).get("login") or "someone",
+                   "updated_days": iso_age_days(pr.get("updatedAt")), "created_days": iso_age_days(pr.get("createdAt")),
+                   "size": f'+{pr.get("additions",0)} -{pr.get("deletions",0)}'},
+        }
 
     # Attach agents by cwd: the deepest worktree path that prefixes the agent's cwd.
     paths = sorted(((c["path"], k) for k, c in cards.items() if c["path"]), key=lambda x: -len(x[0]))
@@ -500,7 +533,7 @@ def collect():
             columns[key].append(c)
         # else: bare worktree with nothing attached, not shown
 
-    URGENCY = ["changes requested", "checks failing", "merge conflicts", "agent needs you", "uncommitted", "agent finished", "in linear", "waiting for prompt", "draft"]
+    URGENCY = ["changes requested", "checks failing", "merge conflicts", "agent needs you", "review requested", "uncommitted", "agent finished", "in linear", "waiting for prompt", "draft"]
 
     def urgency(c):
         """Approved PRs first: one rebase or one CI fix from merging, they are the cheapest

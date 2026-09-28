@@ -32,6 +32,8 @@ assert place(card(pr(draft=True, created_days=3, conflicts=True, checks="fail"))
 assert place(card(pr(draft=True, conflicts=True))) == ("waiting", None)
 assert place(card(pr(draft=True, conflicts=True, created_days=3), [agent("blocked")])) == ("your_move", "agent needs you")
 
+assert place(card(pr(author="alice"), path=None, review_request=True)) == ("your_move", "review requested by alice")
+
 assert place(card(pr(merged=True))) == ("landed", None)
 assert place(card(pr(merged=True), path=None)) == (None, None)
 assert place(card()) == (None, None)

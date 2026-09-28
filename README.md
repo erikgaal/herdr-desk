@@ -5,7 +5,7 @@ A [Herdr](https://herdr.dev) plugin that shows your agent sessions, git worktree
 | Column | A card is here when |
 |---|---|
 | TODO | a Linear issue is assigned to you, in a Todo state, and nothing local exists for it |
-| YOUR MOVE | changes requested, CI red, merge conflicts, an agent is blocked or finished, a draft is older than a day, or an agent is idle without a PR, waiting for its next prompt |
+| YOUR MOVE | someone asked you to review their PR (by name; teams too with `github.team_review_requests`), changes requested, CI red, merge conflicts, an agent is blocked or finished, a draft is older than a day, or an agent is idle without a PR, waiting for its next prompt |
 | WORKING | an agent is running |
 | WAITING ON OTHERS | a PR is open and waits for review |
 | MERGEABLE | a PR is approved and GitHub says it can merge now |
@@ -81,6 +81,7 @@ Press `?` on the board for the full list. The main keys:
 | `Enter` | focus the card's Herdr workspace |
 | `o` / `i` | open the PR / the Linear issue |
 | `a` | start an agent in the card's worktree (on a TODO card, create the worktree first) |
+| `f` | hand the PR's merge conflicts or red CI to the card's idle agent, or to a new one |
 | `n` | copy a short review request for the PR |
 | `x` / `X` | remove the worktree and close its session / force-remove a dirty one after confirmation |
 | `/` | filter every column as you type |

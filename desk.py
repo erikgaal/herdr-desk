@@ -60,6 +60,15 @@ def ticket_url(card, board):
     return None
 
 
+def fill(template, default, fields):
+    """A brief from a configured template, or from its default when the template names a field
+    that does not exist: a broken template must not leave a new session without its task."""
+    try:
+        return template.format(**fields)
+    except (KeyError, IndexError, ValueError):
+        return default.format(**fields)
+
+
 def fit(text, width):
     """One line, hard-truncated with an ellipsis; wrapping inside a narrow card destroys scanability."""
     text = text or ""
@@ -77,6 +86,8 @@ def nudge_text(card):
     pr, issue = card.get("pr"), card.get("issue")
     if not pr or pr["merged"]:
         return None, "no open PR on this card"
+    if card.get("review_request"):
+        return None, "someone else's PR: the review is yours to give"
     days_open = pr["updated_days"] or 0
     waited = "opened this morning" if days_open < 1 else f"open for {days_open:.0f} day{'s' if days_open >= 2 else ''}"
     lines = ["Could you take a review when you have a moment?", ""]
@@ -268,6 +279,7 @@ class Desk(App):
         Binding("n", "nudge", "copy nudge"),
         Binding("v", "review", "review PR"),
         Binding("a", "launch", "launch agent"),
+        Binding("f", "fix", "fix it"),
         Binding("c", "close_ws", "close session"),
         Binding("x", "reap", "reap"),
         Binding("X", "reap_force", "force reap", show=False),
@@ -483,10 +495,38 @@ class Desk(App):
             msg = (r.stderr.strip().splitlines() or ["review failed"])[-1]
             self.call_from_thread(self.notify, msg, severity="error", timeout=12)
 
+    def action_fix(self):
+        """Hand a PR's merge conflicts or red CI to an agent: the card's idle agent when it has
+        one, else a new one in the card's worktree. Both problems at once go in one brief."""
+        c = self.card()
+        pr = (c or {}).get("pr")
+        if not pr or pr.get("merged"):
+            self.notify("no open PR on this card", severity="warning"); return
+        if c.get("review_request"):
+            self.notify("someone else's PR: v reviews it", severity="warning"); return
+        templates = ([config.FIX_CONFLICTS, config.DEFAULT_FIX_CONFLICTS] if pr.get("conflicts") else []) \
+            + ([config.FIX_CHECKS, config.DEFAULT_FIX_CHECKS] if pr.get("checks") == "fail" else [])
+        if not templates:
+            self.notify("nothing mechanical to fix: no merge conflicts and CI is not red", severity="warning"); return
+        fields = {"number": pr["number"], "url": pr["url"], "branch": c["branch"], "base": pr.get("base") or "the base branch"}
+        text = "\n\n".join(fill(templates[i], templates[i + 1], fields) for i in range(0, len(templates), 2))
+        agents = c.get("agents", [])
+        free = next((a for a in agents if a["status"] in ("idle", "done")), None)
+        if free:
+            sh("herdr", "agent", "prompt", free["pane_id"], text)
+            self.notify(f"sent the fix for #{pr['number']} to the {free['kind']} session here", timeout=10)
+            self.load(); return
+        if agents:
+            self.notify(f"the session here is {agents[0]['status']}; press f again once it is idle", severity="warning"); return
+        self.notify(f"launching {config.AGENT_KIND} to fix #{pr['number']} …", timeout=20)
+        self._launch(dict(c), brief=text)
+
     def action_launch(self):
         c = self.card()
         if not c:
             return
+        if c.get("review_request"):
+            self.notify("someone else's PR: v reviews it", severity="warning"); return
         if not c["branch"]:
             self.notify("no branch on this card to launch", severity="warning"); return
         if c.get("orphan_issue"):
@@ -500,7 +540,7 @@ class Desk(App):
         self._launch(dict(c))
 
     @work(thread=True, group="launch")
-    def _launch(self, c):
+    def _launch(self, c, brief=None):
         notify = lambda *a, **k: self.call_from_thread(self.notify, *a, **k)
         repo_root = os.path.join(config.REPOS_DIR, c["repo"])
         args = ["wt", "-C", repo_root, "switch", "--no-cd", "-y", "--format=json"] + (["-c"] if c.get("create") else []) + [c["branch"]]
@@ -523,13 +563,16 @@ class Desk(App):
         if not name[:1].isalpha():
             name = "t-" + name
         sh("herdr", "agent", "start", name, "--kind", config.AGENT_KIND, "--pane", pane)
-        if issue:
-            notify(f"{issue['id']} worktree ready; the agent gets the issue once it is past the trust prompt", timeout=12)
-            self._brief(name, issue, c["branch"])
+        if not brief and issue:
+            fields = {"id": issue["id"], "title": issue["title"], "url": issue["url"], "branch": c["branch"]}
+            brief = fill(config.BRIEF, config.DEFAULT_BRIEF, fields)
+        if brief:
+            notify("worktree ready; the agent gets its brief once it is past the trust prompt", timeout=12)
+            self._brief(name, brief)
         self.load()
 
-    def _brief(self, name, issue, branch):
-        """Hand a fresh session its Linear issue as the first prompt, from the `agent.brief` template.
+    def _brief(self, name, text):
+        """Hand a fresh session its first prompt.
 
         The agent cannot take the brief on its command line (Herdr refuses arguments
         with newlines), and a new worktree opens on the folder-trust dialog, which
@@ -537,12 +580,6 @@ class Desk(App):
         the session to reach idle and only then submits the brief.
         """
         import time
-        fields = {"id": issue["id"], "title": issue["title"], "url": issue["url"], "branch": branch}
-        try:
-            text = config.BRIEF.format(**fields)
-        except (KeyError, IndexError, ValueError):
-            # A template naming an unknown field would otherwise leave the session without its issue.
-            text = config.DEFAULT_BRIEF.format(**fields)
         for _ in range(180):
             r = sh("herdr", "agent", "get", name)
             try:
@@ -825,6 +862,7 @@ class Help(ModalScreen):
         ("n", "copy a Slack nudge for this PR's reviewer"),
         ("v", "review this PR with the configured review command"),
         ("a", "launch an agent here · on a TODO card: pick a repo, create the worktree"),
+        ("f", "hand merge conflicts or red CI to the idle agent here, or a new one"),
         ("c", "close the session (the agent's resume brings it back)"),
         ("x", "remove the worktree, close its session (refuses when dirty)"),
         ("X", "force-remove a dirty worktree after confirming what is discarded"),
@@ -833,7 +871,8 @@ class Help(ModalScreen):
         ("wheel · click on an id", "scroll · open PR or issue"),
         ("Columns", None),
         ("TODO", "assigned Linear issues with nothing local, by priority"),
-        ("YOUR MOVE", "changes requested · CI red · merge conflicts · agent blocked or done"),
+        ("YOUR MOVE", "review asked of you · changes requested · CI red · merge conflicts"),
+        ("", "agent blocked or done"),
         ("", "In Progress in Linear with nothing local · idle agent with no PR"),
         ("", "drafts older than a day, folded after a week"),
         ("WORKING", "an agent is running"),
